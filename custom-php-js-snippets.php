@@ -193,6 +193,21 @@ class IntaSendSnippetShortcode {
         }
     
         $html = '<script src="https://unpkg.com/intasend-inlinejs-sdk@4.0.0/build/intasend-inline.js"></script>';
+            // Add CSS for the button
+            $html .= '<style>
+            .intasend-payment-button {
+                background-color: #007bff;
+                color: white;
+                padding: 10px 20px;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 16px;
+            }
+            .intasend-payment-button:hover {
+                background-color: #0056b3;
+            }
+        </style>';
         $html .= '<div id="' . esc_attr($atts['id']) . '">' . $content . '</div>';
         
         $js = "

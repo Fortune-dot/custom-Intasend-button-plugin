@@ -2,7 +2,7 @@
 /*
 Plugin Name: IntaSend Snippet Shortcode
 Description: Allows adding IntaSend payment button and configuration via shortcodes
-Version: 2.0
+Version: 2.2
 Author: Fortune Dev
 */
 
@@ -78,9 +78,9 @@ class IntaSendSnippetShortcode {
         );
 
         add_settings_field(
-            'success_redirect_url',
-            'Success Redirect URL',
-            array($this, 'success_redirect_url_callback'),
+            'redirect_urls',
+            'Redirect URLs',
+            array($this, 'redirect_urls_callback'),
             'intasend-setting-admin',
             'intasend_setting_section'
         );
@@ -94,8 +94,11 @@ class IntaSendSnippetShortcode {
         if (isset($input['environment'])) {
             $sanitary_values['environment'] = $input['environment'];
         }
-        if (isset($input['success_redirect_url'])) {
-            $sanitary_values['success_redirect_url'] = sanitize_url($input['success_redirect_url']);
+        if (isset($input['redirect_urls']) && is_array($input['redirect_urls'])) {
+            foreach ($input['redirect_urls'] as $index => $url_data) {
+                $sanitary_values['redirect_urls'][$index]['code'] = sanitize_text_field($url_data['code']);
+                $sanitary_values['redirect_urls'][$index]['url'] = sanitize_url($url_data['url']);
+            }
         }
         return $sanitary_values;
     }
@@ -112,45 +115,113 @@ class IntaSendSnippetShortcode {
     }
 
     public function environment_callback() {
+        $selected = isset($this->options['environment']) ? $this->options['environment'] : 'test';
         ?>
         <select name="intasend_options[environment]" id="environment">
-            <option value="test" <?php selected($this->options['environment'], 'test'); ?>>Test</option>
-            <option value="live" <?php selected($this->options['environment'], 'live'); ?>>Live</option>
+            <option value="test" <?php selected($selected, 'test'); ?>>Test</option>
+            <option value="live" <?php selected($selected, 'live'); ?>>Live</option>
         </select>
         <?php
     }
 
-    public function success_redirect_url_callback() {
-        printf(
-            '<input type="text" id="success_redirect_url" name="intasend_options[success_redirect_url]" value="%s" />',
-            isset($this->options['success_redirect_url']) ? esc_attr($this->options['success_redirect_url']) : ''
-        );
+    public function redirect_urls_callback() {
+        $redirect_urls = isset($this->options['redirect_urls']) ? $this->options['redirect_urls'] : array();
+        echo '<div id="redirect-urls-container">';
+        if (!empty($redirect_urls)) {
+            foreach ($redirect_urls as $index => $url) {
+                echo '<div class="redirect-url-entry">';
+                echo '<input type="text" name="intasend_options[redirect_urls][' . $index . '][code]" value="' . esc_attr($url['code']) . '" placeholder="Code" />';
+                echo '<input type="text" name="intasend_options[redirect_urls][' . $index . '][url]" value="' . esc_attr($url['url']) . '" placeholder="Redirect URL" />';
+                echo '<button type="button" class="remove-redirect-url">Remove</button>';
+                echo '</div>';
+            }
+        }
+        echo '</div>';
+        echo '<button type="button" id="add-redirect-url">Add Redirect URL</button>';
+    
+        // Add JavaScript to handle dynamic addition and removal of redirect URL fields
+        ?>
+        <script>
+        jQuery(document).ready(function($) {
+            var container = $('#redirect-urls-container');
+            var index = <?php echo count($redirect_urls); ?>;
+    
+            $('#add-redirect-url').on('click', function() {
+                var html = '<div class="redirect-url-entry">' +
+                    '<input type="text" name="intasend_options[redirect_urls][' + index + '][code]" placeholder="Code" />' +
+                    '<input type="text" name="intasend_options[redirect_urls][' + index + '][url]" placeholder="Redirect URL" />' +
+                    '<button type="button" class="remove-redirect-url">Remove</button>' +
+                    '</div>';
+                container.append(html);
+                index++;
+            });
+    
+            $(document).on('click', '.remove-redirect-url', function() {
+                $(this).parent().remove();
+            });
+        });
+        </script>
+        <?php
     }
 
     public function intasend_snippet_shortcode($atts, $content = null) {
         $options = get_option('intasend_options');
         $public_api_key = isset($options['public_api_key']) ? $options['public_api_key'] : '';
         $environment = isset($options['environment']) ? $options['environment'] : 'test';
-        $success_redirect_url = isset($options['success_redirect_url']) ? $options['success_redirect_url'] : '';
-
+        $redirect_urls = isset($options['redirect_urls']) ? $options['redirect_urls'] : array();
+    
+        // Parse shortcode attributes
+        $atts = shortcode_atts(
+            array(
+                'amount' => '0',
+                'currency' => 'KES',
+                'id' => uniqid('intasend_'),
+                'redirect_code' => ''
+            ),
+            $atts,
+            'intasend_snippet'
+        );
+    
+        $success_redirect_url = '';
+        if (!empty($atts['redirect_code'])) {
+            foreach ($redirect_urls as $url_data) {
+                if ($url_data['code'] === $atts['redirect_code']) {
+                    $success_redirect_url = $url_data['url'];
+                    break;
+                }
+            }
+        }
+    
         $html = '<script src="https://unpkg.com/intasend-inlinejs-sdk@4.0.0/build/intasend-inline.js"></script>';
-        $html .= $content;
+        $html .= '<div id="' . esc_attr($atts['id']) . '">' . $content . '</div>';
         
         $js = "
-        new window.IntaSend({
-            publicAPIKey: '{$public_api_key}',
-            live: " . ($environment === 'live' ? 'true' : 'false') . "
-        })
-        .on('COMPLETE', (results) => {
-            console.log('Payment completed', results);
-            " . ($success_redirect_url ? "window.location.href = '{$success_redirect_url}';" : "") . "
-        })
-        .on('FAILED', (results) => {console.log('Payment failed', results)})
-        .on('IN-PROGRESS', (results) => {console.log('Payment in progress', results)});
+        document.addEventListener('DOMContentLoaded', function() {
+            var button = document.querySelector('#" . esc_js($atts['id']) . " .intasend-payment-button');
+            if (button) {
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    new window.IntaSend({
+                        publicAPIKey: '" . esc_js($public_api_key) . "',
+                        live: " . ($environment === 'live' ? 'true' : 'false') . "
+                    })
+                    .on('COMPLETE', (results) => {
+                        console.log('Payment completed', results);
+                        " . ($success_redirect_url ? "window.location.href = '" . esc_js($success_redirect_url) . "';" : "") . "
+                    })
+                    .on('FAILED', (results) => {console.log('Payment failed', results)})
+                    .on('IN-PROGRESS', (results) => {console.log('Payment in progress', results)})
+                    .run({
+                        amount: " . esc_js($atts['amount']) . ",
+                        currency: '" . esc_js($atts['currency']) . "'
+                    });
+                });
+            }
+        });
         ";
-
+    
         $html .= "<script>{$js}</script>";
-
+    
         return $html;
     }
 
